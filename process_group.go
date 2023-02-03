@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/user"
@@ -18,6 +19,10 @@ type ProcessGroup struct {
 	commandPath string
 	sockfile    *os.File
 	user        *user.User
+
+	// if true, socketmaster will wait SIGUSR1 from the new child
+	// before killing the old one
+	waitChildNotif bool
 }
 
 type processSet struct {
@@ -25,12 +30,13 @@ type processSet struct {
 	set map[*os.Process]bool
 }
 
-func MakeProcessGroup(commandPath string, sockfile *os.File, u *user.User) *ProcessGroup {
+func MakeProcessGroup(commandPath string, sockfile *os.File, u *user.User, waitChildNotif bool) *ProcessGroup {
 	return &ProcessGroup{
-		set:         newProcessSet(),
-		commandPath: commandPath,
-		sockfile:    sockfile,
-		user:        u,
+		set:            newProcessSet(),
+		commandPath:    commandPath,
+		sockfile:       sockfile,
+		user:           u,
+		waitChildNotif: waitChildNotif,
 	}
 }
 
@@ -43,6 +49,9 @@ func (self *ProcessGroup) StartProcess() (process *os.Process, err error) {
 	}
 
 	env := append(os.Environ(), "EINHORN_FDS=3")
+	if self.waitChildNotif {
+		env = append(env, fmt.Sprintf("SOCKETMASTER_PID=%d", os.Getpid()))
+	}
 
 	procAttr := &os.ProcAttr{
 		Env:   env,
@@ -61,6 +70,7 @@ func (self *ProcessGroup) StartProcess() (process *os.Process, err error) {
 	}
 
 	args := append([]string{self.commandPath}, flag.Args()...)
+
 	log.Println("Starting", self.commandPath, args)
 	process, err = os.StartProcess(self.commandPath, args, procAttr)
 	if err != nil {
@@ -71,7 +81,7 @@ func (self *ProcessGroup) StartProcess() (process *os.Process, err error) {
 	self.set.Add(process)
 
 	// Prefix stdout and stderr lines with the [pid] and send it to the log
-	logOutput(ioReader, process.Pid, &self.wg)
+	go logOutput(ioReader, process.Pid, self.wg)
 
 	// Handle the process death
 	go func() {
@@ -109,6 +119,13 @@ func newProcessSet() *processSet {
 	return set
 }
 
+func (self *processSet) Len() int {
+	self.Lock()
+	defer self.Unlock()
+
+	return len(self.set)
+}
+
 func (self *processSet) Add(process *os.Process) {
 	self.Lock()
 	defer self.Unlock()
@@ -131,29 +148,19 @@ func (self *processSet) Remove(process *os.Process) {
 	delete(self.set, process)
 }
 
-func (self *processSet) Len() int {
-	self.Lock()
-	defer self.Unlock()
-	return len(self.set)
-}
-
-func logOutput(input *os.File, pid int, wg *sync.WaitGroup) {
+func logOutput(input *os.File, pid int, wg sync.WaitGroup) {
+	var err error
+	var line string
 	wg.Add(1)
 
-	go func() {
-		defer wg.Done()
+	reader := bufio.NewReader(input)
 
-		var (
-			err    error
-			line   string
-			reader = bufio.NewReader(input)
-		)
-
-		for err == nil {
-			line, err = reader.ReadString('\n')
-			if line != "" {
-				log.Printf("[%d] %s", pid, line)
-			}
+	for err == nil {
+		line, err = reader.ReadString('\n')
+		if line != "" {
+			log.Printf("[%d] %s", pid, line)
 		}
-	}()
+	}
+
+	wg.Done()
 }
