@@ -30,7 +30,7 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: [runnerset=code-scanning-runners, env=production]
+    runs-on: [runnerset=code-scanning-runners, env=staging]
     permissions: write-all
     env: 
       CODEQL_RAM: 8192
@@ -51,8 +51,8 @@ jobs:
       uses: google-github-actions/auth@v0
       with:
         token_format: 'access_token'
-        workload_identity_provider: 'projects/604888098501/locations/global/workloadIdentityPools/github-identity-pool/providers/gh-cs-identity-pool-provider'
-        service_account: wif-code-scanning@gtl-itsec-production.iam.gserviceaccount.com
+        workload_identity_provider: 'projects/632896628736/locations/global/workloadIdentityPools/github-identity-pool/providers/devops-gh-identity-pool-provider'
+        service_account: wif-code-scanning@gtl-itsec-staging.iam.gserviceaccount.com
     - name: 'Set up Cloud SDK'
       uses: 'google-github-actions/setup-gcloud@v0'
     - id: 'secrets'
